@@ -1,0 +1,25 @@
+# Pipeline à ajouter sous `pipelines:` dans config/ai-agent.yaml
+  phone_harness:
+    stt: local_stt
+    llm: native_llm
+    tts: local_tts
+    options:
+      stt:
+        ws_url: ${LOCAL_WS_URL:-ws://host.docker.internal:8765}
+        chunk_ms: 160
+        mode: stt
+        stream_format: pcm16_16k
+        streaming: true
+      llm:
+        base_url: http://host.docker.internal:9031/v1
+        model: deepseek-flash
+        temperature: 0.4
+        max_tokens: 200
+      tts:
+        ws_url: ${LOCAL_WS_URL:-ws://host.docker.internal:8765}
+        mode: tts
+        response_timeout_sec: 30
+        format:
+          encoding: mulaw
+          sample_rate: 8000
+  local_hybrid:
