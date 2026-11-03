@@ -33,7 +33,8 @@ MIN_SPEECH = 0.30
 
 
 def log(*args: object) -> None:
-    print(*args, file=sys.stderr, flush=True)
+    import time
+    print(time.strftime("%H:%M:%S"), *args, file=sys.stderr, flush=True)
 
 
 def transcribe(pcm: bytes) -> str:
@@ -76,6 +77,8 @@ class Call:
         self.silence = 0.0
         self.speaking = False
         self.busy = False
+        self.frames = 0
+        self.peak = 0.0
 
     async def write_audio(self, pcm: bytes) -> None:
         for offset in range(0, len(pcm), FRAME):
@@ -127,6 +130,8 @@ class Call:
         while True:
             head = await self.reader.readexactly(3)
             kind, length = head[0], struct.unpack("!H", head[1:])[0]
+            if kind not in (0x00, 0x10):
+                log("en-tête inattendu:", hex(kind), "longueur", length)
             if kind == 0x00:
                 log("raccroché")
                 return
@@ -135,6 +140,11 @@ class Call:
             audio = await self.reader.readexactly(length)
             samples = array.array("h", audio[: len(audio) // 2 * 2])
             energy = math.sqrt(sum(s * s for s in samples) / max(1, len(samples)))
+            self.frames += 1
+            self.peak = max(self.peak, energy)
+            if self.frames % 250 == 0:  # toutes les 5 s environ
+                log(f"trames={self.frames} énergie_max={self.peak:.0f} parole={'oui' if self.speaking else 'non'}")
+                self.peak = 0.0
             if energy >= SILENCE_RMS:
                 self.speaking = True
                 self.silence = 0.0
