@@ -78,6 +78,16 @@ launchctl load ~/Library/LaunchAgents/com.harnais.web.plist
 - **Limite** : le cookie de session est stocké en clair dans l'objet Kubernetes `Middleware/harnais-cookie`,
   lisible par quiconque administre le cluster. Voir la tâche de sécurisation à venir.
 
+## Procédure de coupure d'urgence
+
+```sh
+export KUBECONFIG=~/.kube/vezina-local.yaml
+kubectl -n lan delete ingressroute harnais     # coupe l'accès distant (le Mac reste joignable en LAN)
+launchctl bootout gui/$(id -u)/com.harnais.web # arrête le serveur web
+```
+
+Pour rouvrir : `kubectl apply -f k8s/maison-harness.yaml`, puis recharger l'agent launchd.
+
 ## Tâche future — mieux sécuriser
 
 1. Remplacer l'injection de cookie par une authentification de bout en bout

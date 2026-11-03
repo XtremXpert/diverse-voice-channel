@@ -45,6 +45,18 @@ spec:
   basicAuth:
     secret: harnais-basicauth
 ---
+---
+# Limite le débit : 20 req/s en moyenne, rafale de 40, contre le bourrage d'identifiants.
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: harnais-ratelimit
+  namespace: lan
+spec:
+  rateLimit:
+    average: 20
+    burst: 40
+---
 apiVersion: traefik.io/v1alpha1
 kind: IngressRoute
 metadata:
@@ -58,6 +70,7 @@ spec:
     - match: Host(`harnais.636.vezina.biz`)
       kind: Rule
       middlewares:
+        - name: harnais-ratelimit
         - name: harnais-auth
       services:
         - name: harnais-harness

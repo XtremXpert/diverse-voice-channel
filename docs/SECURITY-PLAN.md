@@ -20,6 +20,19 @@ unique, vérifiable et révocable, sans secret recopié dans le cluster ni jeton
 4. Rotation du mot de passe `basicAuth` : le régénérer et mettre à jour le secret.
 5. Documenter la procédure de coupure d'urgence (`kubectl delete ingressroute harnais -n lan`).
 
+### État de la phase 0
+
+| Point | État |
+|---|---|
+| `rateLimit` (20 req/s, burst 40) | appliqué sur la route ; **429 non reproduit** en test, à revérifier |
+| Journalisation des accès Traefik | **non activée** — nécessite un `HelmChartConfig` pour le chart rke2-traefik |
+| Restriction du port 3080 | pare-feu macOS désactivé ; le serveur ne binde que l'adresse LAN |
+| Rotation du mot de passe | faite (secret `lan/harnais-basicauth` remplacé) |
+| Procédure de coupure d'urgence | documentée dans `KNOWLEDGE-harnais.md` |
+
+Reste à faire pour clore la phase : activer les logs d'accès via `HelmChartConfig`
+(`logs.access.enabled: true`), puis vérifier le 429 avec un vrai générateur de charge.
+
 ## Phase 1 — Authentification unique (demi-journée)
 
 Objectif : supprimer la double saisie et le jeton manuel.
