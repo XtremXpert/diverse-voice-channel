@@ -215,7 +215,8 @@ const CHAT_SYSTEM = process.env.CHAT_SYSTEM ?? "Tu es un assistant vocal au tél
 const AMI_HOST = process.env.AMI_HOST ?? '192.168.234.60'
 const AMI_PORT = Number(process.env.AMI_PORT ?? 5038)
 const AMI_USER = process.env.AMI_USER ?? 'dsh'
-const AMI_SECRET = process.env.AMI_SECRET ?? 'DshVoice2026!Cluster'
+// Aucun secret en dur : fournir AMI_SECRET par Secret Kubernetes.
+const AMI_SECRET = process.env.AMI_SECRET ?? ''
 const OUTCALL_CONTEXT = process.env.OUTCALL_CONTEXT ?? 'ctx-diverse-outcall-0f068c5b-7d01-4f2c-bd9f-bb3e9e9bba31'
 
 /** Callers currently waiting for their far end to answer, newest last. */
