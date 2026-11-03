@@ -58,7 +58,6 @@ spec:
     - match: Host(`harnais.636.vezina.biz`)
       kind: Rule
       middlewares:
-        - name: harnais-lan-only
         - name: harnais-auth
       services:
         - name: harnais-harness

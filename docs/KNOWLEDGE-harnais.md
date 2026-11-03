@@ -29,8 +29,15 @@ navigateur → https://harnais.636.vezina.biz
 ## Double authentification
 
 1. **Mot de passe** (Traefik) : durable, indépendant du harnais.
-2. **Jeton** (harnais) : régénéré à chaque démarrage, capté automatiquement par
-   `scripts/refresh-harnais-cookie.sh` puis injecté en cookie — l'utilisateur ne le voit jamais.
+2. **Jeton** (harnais) : régénéré à chaque démarrage, transmis **une fois** par l'URL
+   `/?token=…`. Le navigateur conserve ensuite son cookie de session ; le jeton n'est plus
+   nécessaire pour ce navigateur, même après redémarrage du serveur.
+
+L'injection automatique du cookie par Traefik a été essayée puis retirée : le harnais
+rejette un cookie réinjecté hors du contexte qui l'a émis (401 sans en-tête
+`WWW-Authenticate`). La capture et la publication du cookie restent dans
+`scripts/publish-harnais-cookie.sh`, mais le middleware `harnais-cookie` n'est plus
+attaché à la route.
 
 ## Exploitation
 

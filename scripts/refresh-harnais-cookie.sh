@@ -9,13 +9,16 @@ PUBLIC_URL=${HARNAIS_PUBLIC_URL:-https://harnais.636.vezina.biz}
 NS=${HARNAIS_NAMESPACE:-lan}
 MIDDLEWARE=${HARNAIS_MIDDLEWARE:-harnais-cookie}
 LOG=/tmp/dsh-web.log
+export KUBECONFIG=${KUBECONFIG:-$HOME/.kube/vezina-local.yaml}
+export PATH="$HOME/.local/bin:/usr/local/bin:/opt/homebrew/bin:$PATH"
+PNPM_BIN=${PNPM_BIN:-$(command -v pnpm || echo "$HOME/.local/bin/pnpm")}
 
 # Un seul serveur à la fois : le port doit être libre avant de démarrer.
 [ -n "$(lsof -tiTCP:"$PORT" -sTCP:LISTEN || true)" ] && kill "$(lsof -tiTCP:"$PORT" -sTCP:LISTEN)" && sleep 2
 : > "$LOG"
 
 cd "${HARNAIS_REPO:-$HOME/code/deepseek-harness}"
-env -u ELECTRON_RUN_AS_NODE pnpm run dsh web --no-open \
+env -u ELECTRON_RUN_AS_NODE "$PNPM_BIN" run dsh web --no-open \
   --host "$HOST" --port "$PORT" --public-url "$PUBLIC_URL" --trusted-host "${PUBLIC_URL#https://}" >> "$LOG" 2>&1 &
 
 # 1. Attendre que le jeton soit imprimé.
