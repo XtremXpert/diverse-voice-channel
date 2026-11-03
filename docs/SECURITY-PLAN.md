@@ -30,8 +30,18 @@ unique, vérifiable et révocable, sans secret recopié dans le cluster ni jeton
 | Rotation du mot de passe | faite (secret `lan/harnais-basicauth` remplacé) |
 | Procédure de coupure d'urgence | documentée dans `KNOWLEDGE-harnais.md` |
 
-Reste à faire pour clore la phase : activer les logs d'accès via `HelmChartConfig`
-(`logs.access.enabled: true`), puis vérifier le 429 avec un vrai générateur de charge.
+**Logs d'accès : tentative abandonnée.** Appliquer un `HelmChartConfig` sur `rke2-traefik`
+a fait repasser le Service Traefik en `ClusterIP` à deux reprises, coupant **tous** les
+services exposés (Odoo, docs, harnais). Réparation immédiate appliquée :
+
+```sh
+kubectl -n kube-system patch svc rke2-traefik --type merge -p '{"spec":{"type":"LoadBalancer"}}'
+```
+
+Ne pas retenter sans banc d'essai : le chart rke2 recompose le Service à chaque
+réconciliation, et la valeur `service.spec.loadBalancerIP` n'est pas honorée comme attendu.
+Alternative à évaluer : collecter les logs via un agent (Promtail/Fluent Bit) sur les pods
+Traefik, sans toucher au chart.
 
 ## Phase 1 — Authentification unique (demi-journée)
 
