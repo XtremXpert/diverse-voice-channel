@@ -1,0 +1,230 @@
+#!/usr/bin/env python3
+"""Pont vocal Wazo ↔ harnais, sur AudioSocket dans le canal d'appel.
+
+Topologie : Wazo exécute AudioSocket(uuid, ip:8092) DANS le canal d'appel, donc
+un seul canal et un seul pont. Ce service reçoit l'audio de l'appelant en slin
+8 kHz, le fait transcrire par le serveur local d'AVA (Whisper), interroge le
+harnais, puis renvoie la synthèse (Piper) sur le même socket.
+
+Variables d'environnement :
+  BRIDGE_PORT      port d'écoute AudioSocket (défaut 8092)
+  LOCAL_AI_URL     websocket du serveur local (défaut ws://127.0.0.1:8765)
+  LOCAL_AI_TOKEN   jeton d'authentification du serveur local
+  HARNESS_URL      façade OpenAI du harnais (défaut http://127.0.0.1:9031/v1)
+"""
+from __future__ import annotations
+
+import asyncio
+import base64
+import json
+import os
+import struct
+import sys
+import urllib.request
+
+import audioop
+import websockets
+
+PORT = int(os.environ.get("BRIDGE_PORT", "8092"))
+LOCAL_AI_URL = os.environ.get("LOCAL_AI_URL", "ws://127.0.0.1:8765")
+LOCAL_AI_TOKEN = os.environ.get("LOCAL_AI_TOKEN", "")
+HARNESS_URL = os.environ.get("HARNESS_URL", "http://127.0.0.1:9031/v1")
+PROMPT = (
+    "Tu es un assistant vocal au téléphone. Réponds en français, en une ou deux "
+    "phrases courtes, sans markdown ni liste."
+)
+
+FRAME = 320  # 20 ms de slin 8 kHz (16 bits)
+
+
+def log(*args: object) -> None:
+    print(*args, file=sys.stderr, flush=True)
+
+
+def ask_harness(text: str) -> str:
+    """Interroge le harnais et renvoie sa réponse, ou une phrase de repli."""
+    body = json.dumps(
+        {
+            "model": "deepseek-flash",
+            "messages": [
+                {"role": "system", "content": PROMPT},
+                {"role": "user", "content": text},
+            ],
+        }
+    ).encode()
+    request = urllib.request.Request(
+        f"{HARNESS_URL}/chat/completions",
+        data=body,
+        headers={"content-type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=45) as response:
+            payload = json.load(response)
+        return (payload["choices"][0]["message"]["content"] or "").strip()
+    except Exception as error:  # aucune réponse utilisable : on parle quand même
+        log("harnais injoignable:", type(error).__name__, str(error)[:120])
+        return "Je n'arrive pas à joindre le harnais pour le moment."
+
+
+class Call:
+    """Une connexion AudioSocket, avec son canal vers le serveur local."""
+
+    def __init__(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        self.reader = reader
+        self.writer = writer
+        self.ws: websockets.WebSocketClientProtocol | None = None
+        self.uuid = ""
+        self.busy = False
+        self.greeted = False
+        self.audio_bytes = 0
+        self.expect_audio = False
+        self.we_requested = False
+
+    async def connect_local(self) -> None:
+        self.ws = await websockets.connect(LOCAL_AI_URL, max_size=None)
+        await self.ws.send(json.dumps({"type": "auth", "auth_token": LOCAL_AI_TOKEN}))
+        asyncio.create_task(self.receive_local())
+
+    async def send_audio(self, payload: bytes) -> None:
+        """Écrit des échantillons slin dans le socket, au rythme réel de 20 ms.
+
+        AudioSocket est un flux temps réel : écrire plusieurs secondes d'un coup
+        remplit le tampon d'Asterisk et l'audio est jeté silencieusement.
+        """
+        for offset in range(0, len(payload), FRAME):
+            chunk = payload[offset : offset + FRAME]
+            if len(chunk) < FRAME:
+                chunk = chunk + b"\x00" * (FRAME - len(chunk))
+            try:
+                self.writer.write(b"\x10" + struct.pack("!H", len(chunk)) + chunk)
+                await self.writer.drain()
+                await asyncio.sleep(FRAME / 16000.0)  # 20 ms par trame de 160 échantillons
+            except (ConnectionResetError, BrokenPipeError):
+                return
+
+    async def speak(self, text: str) -> None:
+        assert self.ws is not None
+        self.we_requested = True  # seule cette synthèse doit être jouée
+        await self.ws.send(
+            json.dumps(
+                {
+                    "type": "tts_request",
+                    "text": text,
+                    "call_id": self.uuid,
+                    "voice_id": "default",
+                    "encoding": "mulaw",
+                    "sample_rate": 8000,
+                }
+            )
+        )
+
+    async def receive_local(self) -> None:
+        """Traite les messages du serveur local : transcription puis synthèse."""
+        assert self.ws is not None
+        async for raw in self.ws:
+            if isinstance(raw, bytes):
+                if not self.expect_audio:
+                    log("trame ignorée (voix interne du serveur):", len(raw), "octets")
+                    continue
+                self.expect_audio = False
+                log("trame binaire reçue:", len(raw), "octets")
+                # Le serveur local envoie la synthèse en trame binaire séparée,
+                # juste après le message JSON qui la décrit : c'est du µ-law 8 kHz.
+                samples = audioop.ulaw2lin(raw, 2)
+                await self.send_audio(samples)
+                self.audio_bytes += len(samples)
+                log("audio envoyé:", len(samples), "octets (total", self.audio_bytes, ")")
+                continue
+            try:
+                message = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            kind = message.get("type")
+            if kind not in {"stt_result", "partial"}:
+                log("reçu:", kind, str(message.get("text") or "")[:40])
+
+            if kind in {"connected", "auth_response"} and not self.greeted and self.ws:
+                self.greeted = True
+                await self.speak("Bonjour, je suis votre assistant. Que puis-je faire ?")
+
+            elif kind == "stt_result" and message.get("is_final"):
+                text = (message.get("text") or "").strip()
+                log("transcription:", text or "(vide)")
+                if not text or self.busy:
+                    continue
+                self.busy = True
+                answer = await asyncio.to_thread(ask_harness, text)
+                log("réponse:", answer[:120])
+                if answer:
+                    await self.speak(answer)
+                self.busy = False
+
+            elif kind in {"tts_audio", "tts_response"}:
+                if not self.we_requested:
+                    log("synthèse ignorée (serveur):", str(message.get("text") or "")[:40])
+                    self.expect_audio = False
+                    continue
+                self.we_requested = False
+                self.expect_audio = True
+                blob = message.get("audio") or message.get("audio_b64") or message.get("data") or ""
+                if not blob:
+                    continue
+                raw_audio = base64.b64decode(blob)
+                encoding = (message.get("encoding") or "mulaw").lower()
+                samples = audioop.ulaw2lin(raw_audio, 2) if "mulaw" in encoding else raw_audio
+                rate = int(message.get("sample_rate_hz") or message.get("sample_rate") or 8000)
+                if rate != 8000:
+                    samples, _ = audioop.ratecv(samples, 2, 1, rate, 8000, None)
+                await self.send_audio(samples)
+
+    async def run(self) -> None:
+        header = await self.reader.readexactly(3)
+        kind, length = header[0], struct.unpack("!H", header[1:])[0]
+        if kind != 0x01 or length != 16:
+            log("en-tête AudioSocket inattendu:", kind, length)
+            return
+        self.uuid = (await self.reader.readexactly(16)).hex()
+        log("appel entrant, uuid:", self.uuid)
+        await self.connect_local()
+
+        while True:
+            head = await self.reader.readexactly(3)
+            kind, length = head[0], struct.unpack("!H", head[1:])[0]
+            if kind == 0x00:
+                log("appel raccroché")
+                return
+            if kind == 0x10 and length:
+                audio = await self.reader.readexactly(length)
+                if self.ws is not None and audio:
+                    await self.ws.send(audio)
+
+    async def close(self) -> None:
+        if self.ws is not None:
+            await self.ws.close()
+        self.writer.close()
+
+
+async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+    call = Call(reader, writer)
+    try:
+        await call.run()
+    except (asyncio.IncompleteReadError, ConnectionResetError):
+        log("connexion interrompue")
+    except Exception as error:  # une erreur ne doit pas tuer le serveur
+        log("erreur:", type(error).__name__, str(error)[:160])
+    finally:
+        await call.close()
+
+
+async def main() -> None:
+    server = await asyncio.start_server(handle, "0.0.0.0", PORT)
+    log(f"pont vocal à l'écoute sur 0.0.0.0:{PORT} → {LOCAL_AI_URL}")
+    async with server:
+        await server.serve_forever()
+
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass
