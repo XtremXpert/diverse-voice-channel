@@ -1,0 +1,56 @@
+# Accès HTTPS au harnais (Mac Studio, 192.168.235.231:3080) via le Traefik du cluster.
+# Le service n'a pas de sélecteur : la cible est une adresse hors cluster.
+apiVersion: v1
+kind: Service
+metadata:
+  name: maison-harness
+  namespace: default
+spec:
+  ports:
+    - name: http
+      port: 3080
+      targetPort: 3080
+---
+apiVersion: v1
+kind: Endpoints
+metadata:
+  name: maison-harness
+  namespace: default
+subsets:
+  - addresses:
+      - ip: 192.168.235.231
+    ports:
+      - name: http
+        port: 3080
+---
+# Restreint l'accès au réseau local (/20) ; retirer pour ouvrir plus largement.
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: maison-lan-only
+  namespace: default
+spec:
+  ipAllowList:
+    sourceRange:
+      - 192.168.224.0/20
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: maison
+  namespace: default
+  annotations:
+    traefik.ingress.kubernetes.io/router.middlewares: default-maison-lan-only@kubernetescrd
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: maison.636.vezina.biz
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: maison-harness
+                port:
+                  number: 3080

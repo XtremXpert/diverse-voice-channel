@@ -53,3 +53,44 @@ le téléphone est donc un canal de communication standard, pas un agent sépar�
 - Asterisk ≥ 18 avec `res_audiosocket` et ARI.
 - Docker Compose.
 - Une clé `DEEPSEEK_API_KEY` pour le harnais.
+
+## Accès distant au harnais (HTTPS)
+
+Le harnais tourne sur le Mac Studio (`192.168.235.231:3080`, jeton obligatoire). Le cluster
+l'expose en HTTPS via Traefik, sans ouvrir le Mac directement sur Internet.
+
+```
+navigateur → https://maison.636.vezina.biz → Traefik (192.168.235.115)
+           → Service maison-harness (sans sélecteur) → 192.168.235.231:3080
+```
+
+Déploiement :
+
+```sh
+export KUBECONFIG=~/.kube/vezina-local.yaml
+kubectl apply -f k8s/maison-harness.yaml
+```
+
+Le fichier contient le Service, les Endpoints vers le Mac, un middleware `ipAllowList`
+restreint à `192.168.224.0/20`, et l'Ingress `maison.636.vezina.biz`.
+
+Côté Mac Studio, le serveur doit écouter sur l'adresse LAN — jamais sur `0.0.0.0`,
+que le harnais refuse par conception :
+
+```sh
+cd ~/code/deepseek-harness
+env -u ELECTRON_RUN_AS_NODE pnpm run dsh web --host 192.168.235.231 --port 3080
+```
+
+L'URL imprimée au démarrage porte le jeton (`/?token=…`) ; il change à chaque redémarrage.
+Un navigateur ne le fournit qu'une fois, puis s'appuie sur son cookie.
+
+### Sécurité
+
+Le service expose un agent capable d'exécuter des commandes. Trois garde-fous :
+le jeton d'accès, le middleware `ipAllowList` (réseau local uniquement), et le fait que
+le serveur ne binde qu'une adresse concrète. Pour couper l'accès distant :
+
+```sh
+kubectl delete ingress maison -n default
+```
